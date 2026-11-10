@@ -209,12 +209,42 @@ static bool wexVCS2MediaReady=false;
 // [0] VCS dispatches [1] DW1 VCS0 [2] DW1 VCS2 [3..8] bitset bits 3,4,9,10,15,16
 // [9..16] IGScheduler5::notify type 0..7 [17..24] checkForProgress type 0..7
 // [25] CS5 enableStampInterrupt total [26] stamp 36..43 (VCS0) [27] stamp 44..51 (VCS2)
+// [28] VCS2 identity valid [29] VCS2 identity timeout [30] VCS0 valid [31] VCS0 timeout
+// [32] last VCS2 identity [33] last VCS0 identity [34] max polls used
 static mach_vm_address_t wexOrgVCSIRQ,wexOrgSchedNotify,wexOrgSchedProgress,wexOrgCSStamp;
 static uint64_t wexVCSDiag[40];
 static void wexDiagAdd(unsigned i) {__atomic_fetch_add(&wexVCSDiag[i],1ULL,__ATOMIC_RELAXED);}
+// Victus fix (r7): replaces IGInterruptBridge::readAndClearVCSInterrupts on
+// VCS2-only parts. The donor always selects VCS0 then VCS2 in IIR selector 1
+// and polls the identity only 11 times; VCS2 identities were never accepted.
+// Like i915, select only engines flagged in GT_INTR_DW1, wait up to ~100us
+// for the valid bit, map with the donor LUTs (VCS0 3/9/15, VCS2 4/10/16).
 static void wexVCSIRQ(void *bridge,uint64_t *bits,uint32_t dw) {
 	wexDiagAdd(0);if(dw&1)wexDiagAdd(1);if(dw&4)wexDiagAdd(2);
-	FunctionCast(wexVCSIRQ,wexOrgVCSIRQ)(bridge,bits,dw);
+	auto accel=bridge ? *reinterpret_cast<uint8_t **>(static_cast<uint8_t *>(bridge)+0x10) : nullptr;
+	auto mmio=accel ? *reinterpret_cast<volatile uint8_t **>(accel+0x1240) : nullptr;
+	if(!mmio || !bits)return;
+	auto reg=[mmio](uint32_t offset)->volatile uint32_t & {return *reinterpret_cast<volatile uint32_t *>(mmio+offset);};
+	struct Engine {uint32_t select,user,context,other,valid,timeout,last;};
+	const Engine engines[] {{1,3,9,15,30,31,33},{4,4,10,16,28,29,32}};
+	for(const auto &e:engines) {
+		if(!(dw&e.select))continue;
+		reg(0x190074)=e.select;
+		uint32_t identity=0,polls=0;
+		for(;polls<100;++polls) {
+			identity=reg(0x190064);
+			if(identity&0x80000000U)break;
+			IODelay(1);
+		}
+		if(polls>__atomic_load_n(&wexVCSDiag[34],__ATOMIC_RELAXED))__atomic_store_n(&wexVCSDiag[34],uint64_t(polls),__ATOMIC_RELAXED);
+		if(!(identity&0x80000000U)) {wexDiagAdd(e.timeout);continue;}
+		wexDiagAdd(e.valid);__atomic_store_n(&wexVCSDiag[e.last],uint64_t(identity),__ATOMIC_RELAXED);
+		auto set=[bits](uint32_t bit) {bits[bit>>6]|=1ULL<<(bit&63);};
+		if(identity&0x1)set(e.user);
+		if(identity&0x10)set(e.other);
+		if(identity&0x100)set(e.context);
+		reg(0x190064)=identity;
+	}
 	const unsigned seen[] {3,4,9,10,15,16};
 	if(bits)for(unsigned i=0;i<arrsize(seen);++i)if((bits[0]>>seen[i])&1)wexDiagAdd(3+i);
 }
