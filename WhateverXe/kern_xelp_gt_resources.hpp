@@ -39,7 +39,7 @@ inline bool decodeSmallGT(const uint32_t *fuses, SmallGTResources &out) {
 // ADL-P Gen12.3 retains the Xe-LP fuse encoding, with up to six DSS and
 // eight L3 banks. Capacity comes from fuses rather than a CPU/board model.
 // The donor URB backend handles 4/6/8 banks; reject unsupported capacities.
-// Experimental: -wexallowvcs2 admits VCS2-only parts (video mask 4, e.g. 46A3
+// Experimental: -wex-adlp-allow-vcs2 admits VCS2-only parts (video mask 4, e.g. 46A3
 // fuse 0x000E00FB). Apple's driver expects VCS0; issue #76 reports a hard hang.
 inline bool adlpAllowVCS2Only=false;
 inline bool decodeADLPGT(const uint32_t *fuses, GTResources &out) {

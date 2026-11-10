@@ -3846,7 +3846,6 @@ void XE::selectProfile(const XELP::Profile &profile) {
     // Preserve the accepted Display13/TC handoff when enabling Render.
     // noaccel still selects the exact FB-only rejection path.
     adlpRenderRequested=adlpDisplaySelected && !checkKernelArgument("-wex-noaccel");
-    XELP::adlpAllowVCS2Only=checkKernelArgument("-wexallowvcs2");
     adlnRequested=adlnRequested || adlpRenderRequested;
     adlnDetected=adlnRequested;
     display13FramebufferRequested=profile.displayAdmitted() && profile.display==XELP::Display::XeLPD &&
@@ -4341,6 +4340,7 @@ void XE::processKernel(KernelPatcher &patcher, DeviceInfo *info) {
 	// This must precede tglLoadHDMIWiring, tglPrepareMMIOUC and TGL FIA reads.
 	auto physicalGPU = OSDynamicCast(IOPCIDevice, info->videoBuiltin);
 	selectProfile(XELP::deviceProfile(physicalGPU));
+	XELP::adlpAllowVCS2Only=checkKernelArgument("-wex-adlp-allow-vcs2");
     // ADLP_LOAD_ONLY_KERNEL: do not enter TGL MMIO/FIA, bootstrap or VM setup.
     const auto physicalEntry=XELP::deviceEntry(xeProfile.identity);
     adlpLoadOnly=physicalEntry && xeProfile.mobileDisplay13() &&

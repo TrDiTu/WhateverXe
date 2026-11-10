@@ -22,7 +22,7 @@ int main() {
     for(unsigned i=0;i<5;++i){auto save=f[i];f[i]=~0U;assert(!decodeADLPGT(f,r));f[i]=save;}
     for(unsigned bad:{0U,2U,3U}){f[0]=bad;assert(!decodeADLPGT(f,r));}f[0]=1;
     f[4]=0xfffff;assert(!decodeADLPGT(f,r));
-    // 46A3 VCS2-only (Victus 15-fa0xxx): rejected unless -wexallowvcs2.
+    // 46A3 VCS2-only (Victus 15-fa0xxx): rejected unless -wex-adlp-allow-vcs2.
     {uint32_t v[]={1,0x33,0,0x30,0x000e00fb};
      assert(!decodeADLPGT(v,r));
      adlpAllowVCS2Only=true;assert(decodeADLPGT(v,r) && r.eus==64 && r.l3Banks==6);adlpAllowVCS2Only=false;}
