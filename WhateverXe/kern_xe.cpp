@@ -201,6 +201,9 @@ static bool tglInstallSonomaSurfaceABI(KernelPatcher &patcher,size_t index,mach_
  return ready;
 }
 
+// Victus fix: media contexts moved from fused-off VCS0 to VCS2 (see wrapTGLAcceleratorStart).
+static bool wexVCS2MediaReady=false;
+
 static bool xelpInstallNVRAMABI(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size) {
     const auto os=XELP::kernelOS(version);
     if(os==XELP::OS::Unknown)return false;
@@ -11336,6 +11339,29 @@ bool XE::processTGLAccelerator(KernelPatcher &patcher, size_t index, mach_vm_add
 				IORegistryEntry::getRegistryRoot()->setProperty("WEXPAVPDisabledPath",pavpOK);
 				SYSLOG("igfx","PAVP disabled path hits=%u patched=%u",hits,pavpOK);
 			}
+			// Victus fix: on VCS2-only parts VCS0 has no command streamer, but the
+			// video media context params hardcode IGHwCsType 3 / instance 0. The
+			// donor already supports VCS2 (IGHwCsType 4, instance 2 => 0x1D0000).
+			if (adlnDetected && XELP::adlpVCS2OnlyAdmitted) {
+				const uint8_t find[] {3,0,8,0,1,0,0,0,0,0,0,0},replace[] {4,0,8,0,1,0,0,0,2,0,0,0};
+				constexpr size_t paramsOffset=0xBE8A0;
+				auto params=patcher.solveSymbol<mach_vm_address_t>(index,"__ZL34g_cInitGfxHwCtxParamsForVideoMedia",address,size);
+				patcher.clearError();
+				if (!params && patcher.solveSymbol<mach_vm_address_t>(index,"__ZN16IntelAccelerator19startGraphicsEngineEv",address,size)==address+0x25100)
+					params=address+paramsOffset;
+				patcher.clearError();
+				auto site=reinterpret_cast<uint8_t *>(params);
+				bool mediaOK=params>=address && params+sizeof(find)<=address+size && !memcmp(site,find,sizeof(find));
+				if (mediaOK) {
+					KernelPatcher::LookupPatch patch {currentGraphics,find,replace,sizeof(find),1};
+					patcher.applyLookupPatch(&patch,site,sizeof(find)+1);
+					mediaOK=patcher.getError()==KernelPatcher::Error::NoError && !memcmp(site,replace,sizeof(replace));
+					patcher.clearError();
+				}
+				wexVCS2MediaReady=mediaOK;
+				IORegistryEntry::getRegistryRoot()->setProperty("WEXVCS2Media",mediaOK);
+				SYSLOG("igfx","VCS2 media params patched=%u",mediaOK);
+			}
 
 			KernelPatcher::RouteRequest observations[] {
 				{"__ZN16IntelAccelerator5probeEP9IOServicePi", wrapTGLAcceleratorProbe, orgTGLAcceleratorProbe},
@@ -14058,9 +14084,9 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 	// The current kernel personality uses 0x1080040, rejected by AppleGVA before
 	// AVD_CreateAVDAccelerator. The paired TGL VA donor returns 0x1080080.
 	// Align this registry identity only; keep the real PCI ID and TGL bundle.
-	// Victus fix: on VCS2-only parts keep the original ID so AppleGVA rejects
-	// hardware video, and drop the codec keys; VideoToolbox falls back to software.
-	const bool videoOff=XELP::adlpVCS2OnlyAdmitted;
+	// Victus fix: on VCS2-only parts without the VCS2 media patch keep the original
+	// ID so AppleGVA rejects hardware video, and drop the codec keys (software decode).
+	const bool videoOff=XELP::adlpVCS2OnlyAdmitted && !wexVCS2MediaReady;
 	that->setProperty("WEXHardwareVideoDisabled",videoOff);
 	if (videoOff) {
 		const char *keys[] {"IOGVACodec","IOGVAHEVCDecode","IOGVAHEVCDecodeCapabilities","IOGVAHEVCEncodeCapabilities","IOGVABGRAEnc","IOGVAScaler"};
