@@ -14058,7 +14058,14 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 	// The current kernel personality uses 0x1080040, rejected by AppleGVA before
 	// AVD_CreateAVDAccelerator. The paired TGL VA donor returns 0x1080080.
 	// Align this registry identity only; keep the real PCI ID and TGL bundle.
-	if (auto renderer = OSDynamicCast(OSNumber, that->getProperty("IOVARendererID"))) {
+	// Victus fix: on VCS2-only parts keep the original ID so AppleGVA rejects
+	// hardware video, and drop the codec keys; VideoToolbox falls back to software.
+	const bool videoOff=XELP::adlpVCS2OnlyAdmitted;
+	that->setProperty("WEXHardwareVideoDisabled",videoOff);
+	if (videoOff) {
+		const char *keys[] {"IOGVACodec","IOGVAHEVCDecode","IOGVAHEVCDecodeCapabilities","IOGVAHEVCEncodeCapabilities","IOGVABGRAEnc","IOGVAScaler"};
+		for (auto key:keys) that->removeProperty(key);
+	} else if (auto renderer = OSDynamicCast(OSNumber, that->getProperty("IOVARendererID"))) {
 		if (renderer->unsigned32BitValue() == 0x1080040)
 			that->setProperty("IOVARendererID", 0x1080080, 32);
 	}
@@ -14067,7 +14074,7 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 	// to the per-profile capability dictionary. The TGL personality has the
 	// dictionary but omits the key; use the paired ICL host's registration value.
 	// This exposes decode only and does not invent additional profile support.
-	if (!that->getProperty("IOGVAHEVCDecode") &&
+	if (!videoOff && !that->getProperty("IOGVAHEVCDecode") &&
 	    OSDynamicCast(OSDictionary, that->getProperty("IOGVAHEVCDecodeCapabilities")))
 		that->setProperty("IOGVAHEVCDecode", "2");
 
