@@ -3846,6 +3846,7 @@ void XE::selectProfile(const XELP::Profile &profile) {
     // Preserve the accepted Display13/TC handoff when enabling Render.
     // noaccel still selects the exact FB-only rejection path.
     adlpRenderRequested=adlpDisplaySelected && !checkKernelArgument("-wex-noaccel");
+    XELP::adlpAllowVCS2Only=checkKernelArgument("-wexallowvcs2");
     adlnRequested=adlnRequested || adlpRenderRequested;
     adlnDetected=adlnRequested;
     display13FramebufferRequested=profile.displayAdmitted() && profile.display==XELP::Display::XeLPD &&

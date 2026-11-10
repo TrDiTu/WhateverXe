@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, katana-46a3]
     tags: ['*']
   pull_request:
   workflow_dispatch:
