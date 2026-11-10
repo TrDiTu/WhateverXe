@@ -42,6 +42,9 @@ inline bool decodeSmallGT(const uint32_t *fuses, SmallGTResources &out) {
 // Experimental: -wex-adlp-allow-vcs2 admits VCS2-only parts (video mask 4, e.g. 46A3
 // fuse 0x000E00FB). Apple's driver expects VCS0; issue #76 reports a hard hang.
 inline bool adlpAllowVCS2Only=false;
+// Set when a VCS2-only part was admitted. The donor binds media to VCS0, so
+// hardware video must stay off (VTDecoder faults at NULL+0x284 otherwise).
+inline bool adlpVCS2OnlyAdmitted=false;
 inline bool decodeADLPGT(const uint32_t *fuses, GTResources &out) {
     out={};
     if(!fuses)return false;
@@ -49,6 +52,7 @@ inline bool decodeADLPGT(const uint32_t *fuses, GTResources &out) {
     const auto slice=fuses[0]&0xFF,mask=fuses[1]&0x3F;
     const auto video=(~fuses[4])&0xFF,enhance=((~fuses[4])>>16)&0xF;
     if(slice!=1 || !mask || (video!=1 && video!=5 && !(adlpAllowVCS2Only && video==4)) || enhance!=1)return false;
+    if(video==4)adlpVCS2OnlyAdmitted=true;
     const auto dss=static_cast<uint32_t>(__builtin_popcount(mask));
     const auto perDSS=2*(8-static_cast<uint32_t>(__builtin_popcount(fuses[2]&0xFF)));
     const auto banks=8-static_cast<uint32_t>(__builtin_popcount(fuses[3]&0xFF));
