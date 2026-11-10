@@ -107,17 +107,36 @@ inline void panelFacts(const uint8_t *b,size_t header,size_t size,Ports &ports) 
         if(b[at]==44){duplicate|=power!=nullptr;power=block;powerSize=n;}
         at+=3+n;
     }
-    if(duplicate || !options || optionsSize<1 || options[0]>=16 ||
+    if(duplicate || !options || optionsSize<1 ||
        !edp || edpSize<212 || (ports.version>=232 && (!power || powerSize<56)))return;
-    unsigned internal=PortCount;
-    for(unsigned d=0;d<PortCount;++d)if((ports.present&(1U<<d)) &&
-        ports.port[d].internal() && ports.port[d].dp()) {
-        if(internal!=PortCount)return; // no guessed panel/connector association
-        internal=d;
+    unsigned type=options[0];
+    // Victus fix: 0xFF asks the driver to pick the panel by EDID PnP ID
+    // (Linux i915). Accept it only when every per-type field read below is
+    // identical for all 16 types, so the choice cannot change the result.
+    if(type==0xFF) {
+        const bool bl=!backlightDuplicate && backlight && backlightSize>=129 && backlight[0]==6;
+        bool uniform=true;
+        for(unsigned t=1;t<16 && uniform;++t) {
+            uniform=!memcmp(edp,edp+10*t,10) &&
+                ((u64(edp+204)>>(4*t))&15)==(u64(edp+204)&15) &&
+                (ports.version<232 || !(u16(power+54)&(1U<<t))==!(u16(power+54)&1)) &&
+                (!bl || (!memcmp(backlight+1,backlight+1+6*t,6) && backlight[113]==backlight[113+t]));
+        }
+        if(!uniform)return;
+        type=0;
     }
+    if(type>=16)return;
+    unsigned internal=PortCount,internalMask=0;
+    for(unsigned d=0;d<PortCount;++d)if((ports.present&(1U<<d)) &&
+        ports.port[d].internal() && ports.port[d].dp())internalMask|=1U<<d;
+    // Victus fix: some HP VBTs list eDP on both A and B. Panel power
+    // sequencer 0 and AUX A belong to DDI A, so prefer A; otherwise stay
+    // strict and do not guess between several internal connectors.
+    if(internalMask&1)internal=0;
+    else if(internalMask && !(internalMask&(internalMask-1)))internal=__builtin_ctz(internalMask);
     if(internal==PortCount)return;
     auto &p=ports.panel;
-    p.type=options[0];p.ddi=internal;
+    p.type=type;p.ddi=internal;
     p.lowSwing=((u64(edp+204)>>(4*p.type))&15)==0;
     p.hobl=ports.version>=232 && (u16(power+54)&(1U<<p.type));
     p.valid=true;
