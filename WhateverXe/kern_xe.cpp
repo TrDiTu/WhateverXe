@@ -204,6 +204,39 @@ static bool tglInstallSonomaSurfaceABI(KernelPatcher &patcher,size_t index,mach_
 // Victus fix: media contexts moved from fused-off VCS0 to VCS2 (see wrapTGLAcceleratorStart).
 static bool wexVCS2MediaReady=false;
 
+// Victus G5 diagnostics (read only): per-engine VCS interrupt and completion
+// counters, published live as ioreg WEXVCSDiag (40 x uint64):
+// [0] VCS dispatches [1] DW1 VCS0 [2] DW1 VCS2 [3..8] bitset bits 3,4,9,10,15,16
+// [9..16] IGScheduler5::notify type 0..7 [17..24] checkForProgress type 0..7
+// [25] CS5 enableStampInterrupt total [26] stamp 36..43 (VCS0) [27] stamp 44..51 (VCS2)
+static mach_vm_address_t wexOrgVCSIRQ,wexOrgSchedNotify,wexOrgSchedProgress,wexOrgCSStamp;
+static uint64_t wexVCSDiag[40];
+static void wexDiagAdd(unsigned i) {__atomic_fetch_add(&wexVCSDiag[i],1ULL,__ATOMIC_RELAXED);}
+static void wexVCSIRQ(void *bridge,uint64_t *bits,uint32_t dw) {
+	wexDiagAdd(0);if(dw&1)wexDiagAdd(1);if(dw&4)wexDiagAdd(2);
+	FunctionCast(wexVCSIRQ,wexOrgVCSIRQ)(bridge,bits,dw);
+	const unsigned seen[] {3,4,9,10,15,16};
+	if(bits)for(unsigned i=0;i<arrsize(seen);++i)if((bits[0]>>seen[i])&1)wexDiagAdd(3+i);
+}
+static uint64_t wexSchedNotify(void *s,uint32_t type) {
+	if(type<8)wexDiagAdd(9+type);
+	return FunctionCast(wexSchedNotify,wexOrgSchedNotify)(s,type);
+}
+static uint64_t wexSchedProgress(void *s,uint32_t type) {
+	if(type<8)wexDiagAdd(17+type);
+	return FunctionCast(wexSchedProgress,wexOrgSchedProgress)(s,type);
+}
+static uint64_t wexCSStamp(void *cs,int index) {
+	wexDiagAdd(25);if(index>=36 && index<44)wexDiagAdd(26);if(index>=44 && index<52)wexDiagAdd(27);
+	return FunctionCast(wexCSStamp,wexOrgCSStamp)(cs,index);
+}
+static bool wexVCSDiagSerialize(void *,void *,OSSerialize *serializer) {
+	uint64_t copy[arrsize(wexVCSDiag)];
+	for(unsigned i=0;i<arrsize(copy);++i)copy[i]=__atomic_load_n(&wexVCSDiag[i],__ATOMIC_RELAXED);
+	auto data=OSData::withBytes(copy,sizeof(copy));if(!data)return false;
+	const bool ok=data->serialize(serializer);data->release();return ok;
+}
+
 static bool xelpInstallNVRAMABI(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size) {
     const auto os=XELP::kernelOS(version);
     if(os==XELP::OS::Unknown)return false;
@@ -11359,6 +11392,20 @@ bool XE::processTGLAccelerator(KernelPatcher &patcher, size_t index, mach_vm_add
 					patcher.clearError();
 				}
 				wexVCS2MediaReady=mediaOK;
+				if (mediaOK) {
+					KernelPatcher::RouteRequest diag[] {
+						{"__ZN17IGInterruptBridge25readAndClearVCSInterruptsER8IGBitSetILm46EEj",wexVCSIRQ,wexOrgVCSIRQ},
+						{"__ZN12IGScheduler56notifyE10IGHwCsType",wexSchedNotify,wexOrgSchedNotify},
+						{"__ZN12IGScheduler516checkForProgressE10IGHwCsType",wexSchedProgress,wexOrgSchedProgress},
+						{"__ZN26IGHardwareCommandStreamer520enableStampInterruptEi",wexCSStamp,wexOrgCSStamp}
+					};
+					const bool routed=patcher.routeMultiple(index,diag,arrsize(diag),address,size);
+					patcher.clearError();
+					IORegistryEntry::getRegistryRoot()->setProperty("WEXVCSDiagRouted",routed);
+					if (routed) if (auto live=OSSerializer::forTarget(nullptr,wexVCSDiagSerialize)) {
+						IORegistryEntry::getRegistryRoot()->setProperty("WEXVCSDiag",live);live->release();
+					}
+				}
 				IORegistryEntry::getRegistryRoot()->setProperty("WEXVCS2Media",mediaOK);
 				SYSLOG("igfx","VCS2 media params patched=%u",mediaOK);
 			}
