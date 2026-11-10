@@ -11311,6 +11311,31 @@ bool XE::processTGLAccelerator(KernelPatcher &patcher, size_t index, mach_vm_add
 			ggttOK=ggttOK && reservedOK;
 			IORegistryEntry::getRegistryRoot()->setProperty("TGLGGTT64Writes",ggttOK);
 			patcher.clearError();
+			// Victus fix: PAVPCommandCallback trusts BIOS-locked PAVP bits in
+			// 0x1082C0, then uses the PAVP context at accel+0x1278. That context
+			// is not created here, so startGraphicsEngine faults at NULL+0xB8.
+			// Take the existing "PAVP disabled" branch (same target as je).
+			if (adlnDetected) {
+				const uint8_t find[] {0x80,0x3D,0x3C,0x1F,0x12,0x00,0x00,0x0F,0x84,0xDA,0x00,0x00,0x00};
+				const uint8_t replace[] {0x80,0x3D,0x3C,0x1F,0x12,0x00,0x00,0xE9,0xDB,0x00,0x00,0x00,0x90};
+				constexpr size_t window=0x180;
+				const auto callback=patcher.solveSymbol<mach_vm_address_t>(index,
+					"__ZN16IntelAccelerator19PAVPCommandCallbackE22PAVPSessionCommandID_tjPjb",address,size);
+				patcher.clearError();
+				uint8_t *site=nullptr;unsigned hits=0;
+				if (callback>=address && callback+window<=address+size)
+					for (size_t o=0;o+sizeof(find)<=window;++o)
+						if (!memcmp(reinterpret_cast<const void *>(callback+o),find,sizeof(find))) {site=reinterpret_cast<uint8_t *>(callback+o);++hits;}
+				bool pavpOK=hits==1;
+				if (pavpOK) {
+					KernelPatcher::LookupPatch patch {currentGraphics,find,replace,sizeof(find),1};
+					patcher.applyLookupPatch(&patch,site,sizeof(find)+1);
+					pavpOK=patcher.getError()==KernelPatcher::Error::NoError && !memcmp(site,replace,sizeof(replace));
+					patcher.clearError();
+				}
+				IORegistryEntry::getRegistryRoot()->setProperty("WEXPAVPDisabledPath",pavpOK);
+				SYSLOG("igfx","PAVP disabled path hits=%u patched=%u",hits,pavpOK);
+			}
 
 			KernelPatcher::RouteRequest observations[] {
 				{"__ZN16IntelAccelerator5probeEP9IOServicePi", wrapTGLAcceleratorProbe, orgTGLAcceleratorProbe},
