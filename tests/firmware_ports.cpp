@@ -164,6 +164,19 @@ int main(int argc,char **argv){
   auto q=parse(b.data(),b.size(),Family::TigerLake);
   assert(q.valid()&&!q.panel.valid);
  }
+ // Victus fixes: eDP listed on both A and B selects A; panel type 0xFF
+ // (EDID PnP selection) is accepted only when all 16 entries are identical.
+ {
+  auto v=table({{0x78C6,10,0,0x40},{0x78C6,7,0,0x10},{0x60D2,1,2}});
+  auto o=append(v,40,1);v[o]=0xFF;auto e=append(v,27,212);append(v,44,56);checksum(v);
+  auto q=parse(v.data(),v.size(),Family::TigerLake);
+  assert(q.valid()&&q.panel.valid&&q.panel.type==0&&q.panel.ddi==0);
+  auto x=v;x[e+10*3]=1;checksum(x);assert(!parse(x.data(),x.size(),Family::TigerLake).panel.valid);
+  x=v;x[e+205]=1;checksum(x);assert(!parse(x.data(),x.size(),Family::TigerLake).panel.valid);
+  auto onlyB=table({{0x78C6,7,0,0x10},{0x60D2,1,2}});
+  o=append(onlyB,40,1);onlyB[o]=1;append(onlyB,27,212);append(onlyB,44,56);checksum(onlyB);
+  q=parse(onlyB.data(),onlyB.size(),Family::TigerLake);assert(q.panel.valid&&q.panel.ddi==1&&q.panel.type==1);
+ }
  // PPS sequences select all five fields for all 16 panel types. Backlight
  // corruption is independent of signal/PPS facts and unrelated connectors.
  auto bl=append(panelTable,43,129);panelTable[bl]=6;
